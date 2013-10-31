@@ -85,7 +85,8 @@ namespace pcl
 
       /** \brief Constructor. Triangulation type defaults to \a QUAD_MESH. */
       OrganizedFastMesh ()
-      : max_edge_length_squared_ (0.025f)
+      : max_edge_length_ (-1.0f)
+      , max_edge_length_dist_dependent_ (false)
       , triangle_pixel_size_rows_ (1)
       , triangle_pixel_size_columns_ (1)
       , triangulation_type_ (QUAD_MESH)
@@ -93,7 +94,8 @@ namespace pcl
       , store_shadowed_faces_ (false)
       , cos_angle_tolerance_ (fabsf (cosf (pcl::deg2rad (12.5f))))
       , distance_tolerance_ (-1.0f)
-      , depth_dependent_ (false)
+      , distance_dependent_ (false)
+      , use_depth_as_distance_(false)
       {
         check_tree_ = false;
       };
@@ -105,9 +107,16 @@ namespace pcl
         * \param[in] max_edge_length the maximum edge length
         */
       inline void
-      setMaxEdgeLength (float max_edge_length)
+      setMaxEdgeLength (float max_edge_length, bool distance_dependent)
       {
-        max_edge_length_squared_ = max_edge_length * max_edge_length;
+        max_edge_length_ = max_edge_length;
+        if (max_edge_length_ < 0)
+          return;
+
+        max_edge_length_dist_dependent_ = distance_dependent;
+        if (!max_edge_length_dist_dependent_)
+          max_edge_length_ *= max_edge_length_;
+
       };
 
       /** \brief Set the edge length (in pixels) used for constructing the fixed mesh.
@@ -166,25 +175,53 @@ namespace pcl
       }
 
       /** \brief Store shadowed faces or not.
-        * \param[in] enable set to true to store shadowed faces
-        */
+       * \param[in] enable set to true to store shadowed faces
+       */
       inline void
       storeShadowedFaces (bool enable)
       {
         store_shadowed_faces_ = enable;
       }
 
+      /** \brief Set the angle tolerance used for checking whether or not an edge is occluded.
+       * Standard values are 5deg to 15deg (input in rad!). Set a value smaller than zero to
+       * disable the check for shadowed edges.
+       * \param[in] angle_tolerance Angle tolerance (in rad). Set a value <0 to disable.
+       */
+      inline void
+      setAngleTolerance(float angle_tolerance)
+      {
+        if (angle_tolerance > 0)
+          cos_angle_tolerance_ = fabsf (cosf (angle_tolerance));
+        else
+          cos_angle_tolerance_ = -1.0f;
+      }
+
+
       inline void setDistanceTolerance(float distance_tolerance, bool depth_dependent = false)
       {
         distance_tolerance_ = distance_tolerance;
-        depth_dependent_ = depth_dependent;
-        if (!depth_dependent_)
+        if (distance_tolerance_ < 0)
+          return;
+
+        distance_dependent_ = depth_dependent;
+        if (!distance_dependent_)
           distance_tolerance_ *= distance_tolerance_;
       }
 
+      /** \brief Use the points' depths (z-coordinates) instead of measured distances (points' distances to the viewpoint).
+        * \param[in] enable Set to true skips comptations and further speeds up computation by using depth instead of computing distance. false to disable. */
+      inline void useDepthAsDistance(bool enable)
+      {
+        use_depth_as_distance_ = enable;
+      }
+
     protected:
-      /** \brief max (squared) length of edge */
-      float max_edge_length_squared_;
+      /** \brief max length of edge */
+      float max_edge_length_;
+
+      /** \brief flag whether or not max edge length is distance dependent. */
+      bool max_edge_length_dist_dependent_;
 
       /** \brief size of triangle edges (in pixels) for iterating over rows. */
       int triangle_pixel_size_rows_;
@@ -208,7 +245,12 @@ namespace pcl
       float distance_tolerance_;
 
       /** \brief flag whether or not \a distance_tolerance_ is distance dependent (multiplied by the squared distance to the point) or not. */
-      bool depth_dependent_;
+      bool distance_dependent_;
+
+      /** \brief flag whether or not the points' depths are used instead of measured distances (points' distances to the viewpoint).
+          This flag may be set using useDepthAsDistance(true) for (RGB-)Depth cameras to skip computations and gain additional speed up. */
+      bool use_depth_as_distance_;
+
 
       /** \brief Perform the actual polygonal reconstruction.
         * \param[out] polygons the resultant polygons
@@ -293,30 +335,53 @@ namespace pcl
       inline bool
       isShadowed (const PointInT& point_a, const PointInT& point_b)
       {
+        bool valid = true;
+
         Eigen::Vector3f dir_a = viewpoint_ - point_a.getVector3fMap ();
         Eigen::Vector3f dir_b = point_b.getVector3fMap () - point_a.getVector3fMap ();
         float distance_to_points = dir_a.norm ();
         float distance_between_points = dir_b.norm ();
-        float cos_angle = dir_a.dot (dir_b) / (distance_to_points*distance_between_points);
-        if (cos_angle != cos_angle)
-          cos_angle = 1.0f;
-        bool check_angle = fabs (cos_angle) >= cos_angle_tolerance_;
 
-        bool check_distance = true;
-        if (distance_tolerance_ > 0)
+        if (cos_angle_tolerance_ > 0)
         {
-          float dist_thresh = distance_tolerance_;
-          if (depth_dependent_)
+          float cos_angle = dir_a.dot (dir_b) / (distance_to_points*distance_between_points);
+          if (cos_angle != cos_angle)
+            cos_angle = 1.0f;
+          bool check_angle = fabs (cos_angle) >= cos_angle_tolerance_;
+
+          bool check_distance = true;
+          if (check_angle && (distance_tolerance_ > 0))
           {
-            // const float d = std::max(point_a.z, point_b.z); /* TODO: add flag to either use real or cam (z) distance */
-            const float d = distance_to_points;
-            dist_thresh *= d*d;
-            dist_thresh *= dist_thresh;  // distance_tolerance_ is already squared if depth_dependent_ is false.
+            float dist_thresh = distance_tolerance_;
+            if (distance_dependent_)
+            {
+              float d = distance_to_points;
+              if (use_depth_as_distance_)
+                d = std::max(point_a.z, point_b.z);
+              dist_thresh *= d*d;
+              dist_thresh *= dist_thresh;  // distance_tolerance_ is already squared if distance_dependent_ is false.
+            }
+            check_distance = (distance_between_points > dist_thresh);
           }
-          check_distance = (fabs(dir_b.norm()) > dist_thresh);
+          valid = !(check_angle && check_distance);
         }
 
-        return (check_angle && check_distance);
+        // check if max. edge length is not exceeded
+        if (max_edge_length_ > 0)
+        {
+          float dist_thresh = max_edge_length_;
+          if (max_edge_length_dist_dependent_)
+          {
+            float d = distance_to_points;
+            if (use_depth_as_distance_)
+              d = std::max(point_a.z, point_b.z);
+            dist_thresh *= d*d;
+            dist_thresh *= dist_thresh;  // distance_tolerance_ is already squared if distance_dependent_ is false.
+          }
+          valid = (distance_between_points <= dist_thresh);
+        }
+
+        return !valid;
       }
 
       /** \brief Check if a triangle is valid.
