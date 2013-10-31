@@ -57,7 +57,7 @@ namespace pcl
     *   In Proceedings of the 12th International Conference on Intelligent Autonomous Systems (IAS),
     *   Jeju Island, Korea, June 26-29 2012.
     *   <a href="http://purl.org/holz/papers/holz_2012_ias.pdf">http://purl.org/holz/papers/holz_2012_ias.pdf</a>
-    * 
+    *
     * \author Dirk Holz, Radu B. Rusu
     * \ingroup surface
     */
@@ -89,6 +89,7 @@ namespace pcl
       , triangle_pixel_size_rows_ (1)
       , triangle_pixel_size_columns_ (1)
       , triangulation_type_ (QUAD_MESH)
+      , viewpoint_ (Eigen::Vector3f::Zero ())
       , store_shadowed_faces_ (false)
       , cos_angle_tolerance_ (fabsf (cosf (pcl::deg2rad (12.5f))))
       {
@@ -148,6 +149,20 @@ namespace pcl
         triangulation_type_ = type;
       }
 
+      /** \brief Set the viewpoint from where the input point cloud has been acquired.
+       * \param[in] viewpoint Vector containing the viewpoint coordinates (in the coordinate system of the data)
+       */
+      inline void setViewpoint (const Eigen::Vector3f& viewpoint)
+      {
+        viewpoint_ = viewpoint;
+      }
+
+      /** \brief Get the viewpoint from where the input point cloud has been acquired. */
+      const inline Eigen::Vector3f& getViewpoint () const
+      {
+        return viewpoint_;
+      }
+
       /** \brief Store shadowed faces or not.
         * \param[in] enable set to true to store shadowed faces
         */
@@ -169,6 +184,9 @@ namespace pcl
 
       /** \brief Type of meshing scheme (quads vs. triangles, left cut vs. right cut ... */
       TriangulationType triangulation_type_;
+
+      /** \brief Viewpoint from which the point cloud has been acquired (in the same coordinate frame as the data). */
+      Eigen::Vector3f viewpoint_;
 
       /** \brief Whether or not shadowed faces are stored, e.g., for exploration */
       bool store_shadowed_faces_;
@@ -259,8 +277,7 @@ namespace pcl
       inline bool
       isShadowed (const PointInT& point_a, const PointInT& point_b)
       {
-        Eigen::Vector3f viewpoint = Eigen::Vector3f::Zero (); // TODO: allow for passing viewpoint information
-        Eigen::Vector3f dir_a = viewpoint - point_a.getVector3fMap ();
+        Eigen::Vector3f dir_a = viewpoint_ - point_a.getVector3fMap ();
         Eigen::Vector3f dir_b = point_b.getVector3fMap () - point_a.getVector3fMap ();
         float distance_to_points = dir_a.norm ();
         float distance_between_points = dir_b.norm ();
