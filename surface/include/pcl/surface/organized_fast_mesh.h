@@ -92,6 +92,8 @@ namespace pcl
       , viewpoint_ (Eigen::Vector3f::Zero ())
       , store_shadowed_faces_ (false)
       , cos_angle_tolerance_ (fabsf (cosf (pcl::deg2rad (12.5f))))
+      , distance_tolerance_ (-1.0f)
+      , depth_dependent_ (false)
       {
         check_tree_ = false;
       };
@@ -172,6 +174,14 @@ namespace pcl
         store_shadowed_faces_ = enable;
       }
 
+      inline void setDistanceTolerance(float distance_tolerance, bool depth_dependent = false)
+      {
+        distance_tolerance_ = distance_tolerance;
+        depth_dependent_ = depth_dependent;
+        if (!depth_dependent_)
+          distance_tolerance_ *= distance_tolerance_;
+      }
+
     protected:
       /** \brief max (squared) length of edge */
       float max_edge_length_squared_;
@@ -193,6 +203,12 @@ namespace pcl
 
       /** \brief (Cosine of the) angle tolerance used when checking whether or not an edge between two points is shadowed. */
       float cos_angle_tolerance_;
+
+      /** \brief distance tolerance for filtering out shadowed/occluded edges */
+      float distance_tolerance_;
+
+      /** \brief flag whether or not \a distance_tolerance_ is distance dependent (multiplied by the squared distance to the point) or not. */
+      bool depth_dependent_;
 
       /** \brief Perform the actual polygonal reconstruction.
         * \param[out] polygons the resultant polygons
@@ -284,8 +300,23 @@ namespace pcl
         float cos_angle = dir_a.dot (dir_b) / (distance_to_points*distance_between_points);
         if (cos_angle != cos_angle)
           cos_angle = 1.0f;
-        return (fabs (cos_angle) >= cos_angle_tolerance_);
-        // TODO: check for both: angle almost 0/180 _and_ distance between points larger than noise level
+        bool check_angle = fabs (cos_angle) >= cos_angle_tolerance_;
+
+        bool check_distance = true;
+        if (distance_tolerance_ > 0)
+        {
+          float dist_thresh = distance_tolerance_;
+          if (depth_dependent_)
+          {
+            // const float d = std::max(point_a.z, point_b.z); /* TODO: add flag to either use real or cam (z) distance */
+            const float d = distance_to_points;
+            dist_thresh *= d*d;
+            dist_thresh *= dist_thresh;  // distance_tolerance_ is already squared if depth_dependent_ is false.
+          }
+          check_distance = (fabs(dir_b.norm()) > dist_thresh);
+        }
+
+        return (check_angle && check_distance);
       }
 
       /** \brief Check if a triangle is valid.
