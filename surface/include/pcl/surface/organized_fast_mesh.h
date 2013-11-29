@@ -85,7 +85,10 @@ namespace pcl
 
       /** \brief Constructor. Triangulation type defaults to \a QUAD_MESH. */
       OrganizedFastMesh ()
-      : max_edge_length_ (-1.0f)
+      : max_edge_length_a_ (0.0f)
+      , max_edge_length_b_ (0.0f)
+      , max_edge_length_c_ (0.0f)
+      , max_edge_length_set_ (false)
       , max_edge_length_dist_dependent_ (false)
       , triangle_pixel_size_rows_ (1)
       , triangle_pixel_size_columns_ (1)
@@ -103,21 +106,27 @@ namespace pcl
       /** \brief Destructor. */
       virtual ~OrganizedFastMesh () {};
 
-      /** \brief Set a maximum edge length. TODO: Implement!
-        * \param[in] max_edge_length the maximum edge length
+      /** \brief Set a maximum edge length. 
+        * Using not only the scalar \a a, but also \a b and \a c, allows for using a distance threshold in the form of:
+        * threshold(x) = c*x*x + b*x + a 
+        * \param[in] a scalar coefficient of the (distance-dependent polynom) threshold
+        * \param[in] b linear coefficient of the (distance-dependent polynom) threshold
+        * \param[in] c quadratic coefficient of the (distance-dependent polynom) threshold
         */
       inline void
-      setMaxEdgeLength (float max_edge_length, bool distance_dependent)
+      setMaxEdgeLength (float a, float b = 0.0f, float c = 0.0f)
       {
-        max_edge_length_ = max_edge_length;
-        if (max_edge_length_ < 0)
-          return;
-
-        max_edge_length_dist_dependent_ = distance_dependent;
-        if (!max_edge_length_dist_dependent_)
-          max_edge_length_ *= max_edge_length_;
-
+        max_edge_length_a_ = a;
+        max_edge_length_b_ = b;
+        max_edge_length_c_ = c;
+        max_edge_length_set_ =true;
       };
+
+      inline void
+      unsetMaxEdgeLength ()
+      {
+        max_edge_length_set_  = false;
+      }
 
       /** \brief Set the edge length (in pixels) used for constructing the fixed mesh.
         * \param[in] triangle_size edge length in pixels
@@ -217,8 +226,14 @@ namespace pcl
       }
 
     protected:
-      /** \brief max length of edge */
-      float max_edge_length_;
+      /** \brief max length of edge, scalar component */
+      float max_edge_length_a_;
+      /** \brief max length of edge, scalar component */
+      float max_edge_length_b_;
+      /** \brief max length of edge, scalar component */
+      float max_edge_length_c_;
+      /** \brief flag whether or not edges are limited in length */
+      bool max_edge_length_set_;
 
       /** \brief flag whether or not max edge length is distance dependent. */
       bool max_edge_length_dist_dependent_;
@@ -367,17 +382,14 @@ namespace pcl
         }
 
         // check if max. edge length is not exceeded
-        if (max_edge_length_ > 0)
+        if (max_edge_length_set_)
         {
-          float dist_thresh = max_edge_length_;
-          if (max_edge_length_dist_dependent_)
-          {
-            float d = distance_to_points;
-            if (use_depth_as_distance_)
-              d = std::max(point_a.z, point_b.z);
-            dist_thresh *= d*d;
-            dist_thresh *= dist_thresh;  // distance_tolerance_ is already squared if distance_dependent_ is false.
-          }
+          float dist = (use_depth_as_distance_ ? std::max(point_a.z, point_b.z) : distance_to_points);
+          float dist_thresh = max_edge_length_a_;
+          if (fabs(max_edge_length_b_) > std::numeric_limits<float>::min())
+            dist_thresh += max_edge_length_b_ * dist;
+          if (fabs(max_edge_length_c_) > std::numeric_limits<float>::min())
+            dist_thresh += max_edge_length_c_ * dist * dist;
           valid = (distance_between_points <= dist_thresh);
         }
 
